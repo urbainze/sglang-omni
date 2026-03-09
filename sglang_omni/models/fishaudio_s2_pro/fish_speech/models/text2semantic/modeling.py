@@ -14,6 +14,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from sgl_kernel.flash_attn import flash_attn_with_kvcache
 
 # liger_kernel removed for inference
 from torch import Tensor
@@ -32,19 +33,8 @@ from sglang_omni.models.fishaudio_s2_pro.fish_speech.models.text2semantic.utils 
 )
 from sglang_omni.models.fishaudio_s2_pro.fish_speech.utils import RankedLogger
 
-try:
-    from flash_attn_interface import flash_attn_varlen_func, flash_attn_with_kvcache
-
-    FLASH_ATTN_VERSION = 3
-except ImportError:
-    try:
-        from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
-
-        FLASH_ATTN_VERSION = 2
-    except ImportError:
-        flash_attn_varlen_func = None
-        flash_attn_with_kvcache = None
-        FLASH_ATTN_VERSION = 0
+flash_attn_varlen_func = None
+FLASH_ATTN_VERSION = 2
 
 log = RankedLogger(__name__, rank_zero_only=True)
 

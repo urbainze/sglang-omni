@@ -38,7 +38,7 @@ def _resolve_checkpoint(checkpoint: str) -> str:
     return snapshot_download(checkpoint)
 
 
-def _load_s2pro_model(checkpoint: str, device: str):
+def _load_audio_decoder(checkpoint: str, device: str):
     from transformers import PreTrainedTokenizerFast
 
     from sglang_omni.models.fishaudio_s2_pro.fish_speech.models.text2semantic.configuration import (
@@ -54,11 +54,19 @@ def _load_s2pro_model(checkpoint: str, device: str):
 
     config = FishQwen3OmniConfig.from_pretrained(checkpoint)
     model = FishQwen3OmniForCausalLM.from_pretrained(checkpoint, config=config)
-    model = model.to(device=device, dtype=torch.bfloat16).eval()
-    logger.info("S2-Pro model loaded in %.2fs", time.perf_counter() - t0)
+    model = model.to(dtype=torch.bfloat16).eval()
+
+    audio_decoder = model.audio_decoder
+    audio_decoder.to(device=device)
+    num_codebooks = config.audio_decoder_config.num_codebooks
+    codebook_size = config.audio_decoder_config.vocab_size
+
+    del model
+    torch.cuda.empty_cache()
+    logger.info("Audio decoder loaded in %.2fs", time.perf_counter() - t0)
 
     tokenizer = PreTrainedTokenizerFast.from_pretrained(checkpoint)
-    return model, tokenizer, checkpoint
+    return audio_decoder, num_codebooks, codebook_size, tokenizer, checkpoint
 
 
 def _load_codec(checkpoint_dir: str, device: str):
@@ -209,15 +217,10 @@ def create_sglang_tts_engine_executor(
         create_s2pro_sglang_engine,
     )
 
-    # Load full model to extract audio_decoder, then let text model be GC'd
-    model, tokenizer, checkpoint_dir = _load_s2pro_model(model_path, device)
-
-    num_codebooks = model.config.audio_decoder_config.num_codebooks
-    codebook_size = model.config.audio_decoder_config.vocab_size
-
-    audio_decoder = model.audio_decoder
+    audio_decoder, num_codebooks, codebook_size, tokenizer, checkpoint_dir = (
+        _load_audio_decoder(model_path, device)
+    )
     audio_decoder.setup_caches(max_batch_size=1, dtype=torch.bfloat16)
-    audio_decoder._parent_ref = model
 
     _patch_fish_config_for_sglang(checkpoint_dir)
     server_args = ServerArgs(
