@@ -13,11 +13,14 @@ docker run -it --shm-size 32g --gpus all \
     frankleeeee/sglang-omni:dev /bin/zsh
 
 # Inside Docker
-git clone git@github.com:sgl-project-dev/sglang-omni.git
+git clone https://github.com/sgl-project-dev/sglang-omni.git
 cd sglang-omni
 uv venv .venv -p 3.12 && source .venv/bin/activate
-uv pip install msgpack
 uv pip install -v ".[s2pro]"
+
+# FishAudio S2-Pro requires FlashAttn 2 for the fast decoder
+uv pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+
 huggingface-cli download fishaudio/s2-pro
 ```
 
