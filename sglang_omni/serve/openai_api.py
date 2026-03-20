@@ -89,6 +89,20 @@ def create_app(
     _register_speech(app)
     _register_speech_stream(app)
 
+    # Pre-warm vocoder codec at startup for streaming endpoint
+    @app.on_event("startup")
+    async def _prewarm_vocoder():
+        try:
+            from sglang_omni.models.fishaudio_s2_pro.pipeline.stages import (
+                _resolve_checkpoint, _load_codec,
+            )
+            _ckpt = _resolve_checkpoint("fishaudio/s2-pro")
+            app.state.vocoder_codec = _load_codec(_ckpt, "cuda")
+            app.state.vocoder_device = "cuda"
+            logger.info("Vocoder codec pre-warmed on GPU at startup")
+        except Exception:
+            logger.warning("Could not pre-warm vocoder codec", exc_info=True)
+
     return app
 
 
@@ -498,7 +512,7 @@ def _register_speech_stream(app: FastAPI) -> None:
         gen_req = _build_speech_generate_request(req, default_model)
         gen_req.stream = True
 
-        # Lazy-load vocoder codec on first use
+        # Vocoder codec is pre-warmed at startup (see create_app)
         if not hasattr(app.state, 'vocoder_codec') or app.state.vocoder_codec is None:
             from sglang_omni.models.fishaudio_s2_pro.pipeline.stages import (
                 _resolve_checkpoint, _load_codec,
@@ -510,12 +524,14 @@ def _register_speech_stream(app: FastAPI) -> None:
         codec = app.state.vocoder_codec
         codec_device = app.state.vocoder_device
 
-        CHUNK_SIZE = 5  # decode every N tokens
+        FIRST_CHUNK_SIZE = 1  # emit first audio ASAP
+        CHUNK_SIZE = 5  # subsequent chunks
 
         async def audio_stream():
             """Yield PCM audio chunks as codes stream in."""
             code_columns = []  # list of [num_codebooks+1] tensors
             chunk_idx = 0
+            first_chunk_sent = False
 
             logger.info("Starting streaming generate for %s", request_id)
             async for chunk in client.generate(gen_req, request_id=request_id):
@@ -540,7 +556,8 @@ def _register_speech_stream(app: FastAPI) -> None:
                     if chunk_data.numel() <= 50:
                         code_columns.append(chunk_data)
 
-                        if len(code_columns) >= CHUNK_SIZE:
+                        effective_size = FIRST_CHUNK_SIZE if not first_chunk_sent else CHUNK_SIZE
+                        if len(code_columns) >= effective_size:
                             codes = torch.stack([c[:, 0] if c.dim() > 1 else c for c in code_columns], dim=1)
                             cb_codes = codes[1:]
                             with torch.no_grad():
@@ -548,6 +565,7 @@ def _register_speech_stream(app: FastAPI) -> None:
                             audio_np = audio[0, 0].float().cpu().numpy()
                             pcm = (audio_np * 32767).clip(-32768, 32767).astype(np.int16)
                             yield pcm.tobytes()
+                            first_chunk_sent = True
                             code_columns = []
                     else:
                         # Large tensor = final vocoder output, skip (we decode incrementally)

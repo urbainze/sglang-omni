@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -13,18 +14,27 @@ from sglang_omni.proto import StagePayload
 
 
 class PreprocessingExecutor(Executor):
-    """Run synchronous or asynchronous CPU processing inside an async interface."""
+    """Run synchronous or asynchronous CPU processing inside an async interface.
+
+    Uses a dedicated ThreadPoolExecutor to allow truly concurrent preprocessing
+    of multiple requests (the default asyncio executor is often limited).
+    """
 
     def __init__(
         self,
         processor: Callable[
             [StagePayload], StagePayload | Any | Awaitable[StagePayload | Any]
         ],
+        max_workers: int = 16,
     ):
         self._processor = processor
         self._is_async = inspect.iscoroutinefunction(processor)
         self._results: asyncio.Queue[StagePayload] = asyncio.Queue()
         self._aborted: set[str] = set()
+        self._thread_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="preproc",
+        )
 
     async def add_request(self, payload: StagePayload) -> None:
         request_id = payload.request_id
@@ -35,8 +45,11 @@ class PreprocessingExecutor(Executor):
         if self._is_async:
             result = await self._processor(payload)
         else:
-            # Run synchronous processor in thread pool
-            result = await asyncio.to_thread(self._processor, payload)
+            # Run in dedicated thread pool for true concurrency
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                self._thread_pool, self._processor, payload
+            )
 
         if not isinstance(result, StagePayload):
             result = StagePayload(

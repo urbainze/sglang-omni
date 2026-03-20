@@ -64,6 +64,7 @@ class Worker:
         self._stream_send_queue: _queue_mod.Queue[_PendingStreamItem] = (
             _queue_mod.Queue()
         )
+        self._stream_event: asyncio.Event = asyncio.Event()
         self._stream_send_task: asyncio.Task | None = None
         self._stream_chunk_counters: dict[tuple[str, str], int] = {}
         self._stream_targets: list[str] = []  # Set by compiler
@@ -476,13 +477,18 @@ class Worker:
 
     async def _stream_send_loop(self) -> None:
         """Background async task: drain thread-safe queue, write relay, send messages."""
-        loop = asyncio.get_running_loop()
         while self._stream_running or not self._stream_send_queue.empty():
+            # Fast non-blocking drain first
+            item = None
             try:
-                item = await loop.run_in_executor(
-                    None, lambda: self._stream_send_queue.get(timeout=0.1)
-                )
+                item = self._stream_send_queue.get_nowait()
             except _queue_mod.Empty:
+                # Wait on event with short timeout instead of blocking thread pool
+                try:
+                    await asyncio.wait_for(self._stream_event.wait(), timeout=0.005)
+                    self._stream_event.clear()
+                except asyncio.TimeoutError:
+                    pass
                 continue
             try:
                 await self._do_stream_send(item)

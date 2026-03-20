@@ -118,7 +118,13 @@ def create_preprocessing_executor(model_path: str) -> PreprocessingExecutor:
 
     codec = _load_codec(checkpoint_dir, "cuda")
 
+    _ref_audio_cache: dict[str, torch.Tensor] = {}
+
     def _encode_reference_audio(audio_path: str, device: str = "cuda") -> torch.Tensor:
+        # Cache encoded reference audio to avoid re-encoding the same file
+        if audio_path in _ref_audio_cache:
+            return _ref_audio_cache[audio_path]
+
         import torchaudio
 
         audio, sr = torchaudio.load(audio_path)
@@ -132,7 +138,10 @@ def create_preprocessing_executor(model_path: str) -> PreprocessingExecutor:
             indices, _ = codec.encode(audios, audio_lengths)
             if indices.ndim == 3:
                 indices = indices[0]
-        return indices.cpu()
+        result = indices.cpu()
+        _ref_audio_cache[audio_path] = result
+        logger.info("Cached reference audio encoding for %s", audio_path)
+        return result
 
     def _preprocess(payload: StagePayload) -> StagePayload:
         inputs = payload.request.inputs or {}
