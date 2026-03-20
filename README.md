@@ -9,25 +9,30 @@ Fork de [sglang-omni](https://github.com/sgl-project/sglang-omni) avec des optim
 | Quantification FP8 | ~7.5 GB VRAM economises |
 | KV Cache reduit (0.85 -> 0.35) | ~18 GB KV cache, 47 GB libres |
 | Preprocessing sur GPU | 4.52s -> 0.07s (64x plus rapide) |
-| Endpoint streaming `/v1/audio/speech/stream` | TTFB 11s -> 284ms |
+| Endpoint streaming `/v1/audio/speech/stream` | TTFB 11s -> 83ms |
 | Fix race condition streaming | Tokens arrives au client |
 | Serialisation Tensor pour ZMQ | Transport des codes inter-stages |
 | Fix bug concurrence (rid vide) | Batch 5/5 et 8/8 succes |
 | Credits relay x16 | Debit inter-stages ameliore |
+| CHUNK_SIZE adaptatif (1 puis 5) | TTFB 284ms -> 83ms |
+| Cache encodage audio de reference | Pas de re-encodage du meme wav |
+| Pre-chargement vocoder au demarrage | Elimination du cold start |
+| Preprocessing concurrent (16 threads) | Batch scaling non-lineaire |
+| Event async stream (5ms vs 100ms poll) | Reduction jitter streaming |
 
 ## Resultats
 
 | Metrique | Batch 1 | Batch 5 | Batch 8 |
 |---|---|---|---|
-| TTFB avg | 284 ms | 736 ms | 1169 ms |
-| Total avg | 5.2 s | 9.2 s | 12.6 s |
+| TTFB avg | **83 ms** | **268 ms** | **283 ms** |
+| Total avg | 4.8 s | 7.7 s | 10.1 s |
 | Succes | 1/1 | 5/5 | 8/8 |
 
 ## Installation
 
 ```bash
 # Cloner le repo
-git clone https://github.com/<your-username>/sglang-omni.git
+git clone https://github.com/urbainze/sglang-omni.git
 cd sglang-omni
 
 # Creer l'environnement virtuel
@@ -180,12 +185,13 @@ Endpoint streaming (envoie l'audio par chunks des les premiers tokens).
 |---|---|
 | `sglang_omni/config/compiler.py` | Injection automatique du parametre quantization |
 | `sglang_omni/models/fishaudio_s2_pro/config.py` | Ajout champ quantization, credits relay x16 |
-| `sglang_omni/models/fishaudio_s2_pro/pipeline/stages.py` | GPU codec, quantization, mem_fraction=0.35 |
+| `sglang_omni/models/fishaudio_s2_pro/pipeline/stages.py` | GPU codec, quantization, mem_fraction=0.35, cache ref audio |
 | `sglang_omni/models/fishaudio_s2_pro/pipeline/engine_io.py` | Fix rid vide pour la concurrence |
 | `sglang_omni/executors/engine_executor.py` | Race condition stream + serialisation tensor |
-| `sglang_omni/serve/openai_api.py` | Nouveau endpoint streaming `/v1/audio/speech/stream` |
+| `sglang_omni/executors/preprocessing_executor.py` | Thread pool dedie (16 workers) pour preprocessing concurrent |
+| `sglang_omni/serve/openai_api.py` | Streaming endpoint, CHUNK_SIZE adaptatif, pre-warm vocoder |
 | `sglang_omni/pipeline/coordinator.py` | Debug logging stream |
-| `sglang_omni/pipeline/worker/runtime.py` | Debug logging forward_stream |
+| `sglang_omni/pipeline/worker/runtime.py` | Event async stream (5ms), debug logging |
 
 ## Credits
 
