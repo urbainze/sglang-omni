@@ -87,6 +87,7 @@ def create_app(
     _register_models(app)
     _register_chat_completions(app)
     _register_speech(app)
+    _register_speech_stream(app)
 
     return app
 
@@ -476,6 +477,111 @@ def _register_speech(app: FastAPI) -> None:
             headers=headers,
         )
 
+
+
+
+# POST /v1/audio/speech/stream
+# ---------------------------------------------------------------------------
+
+
+def _register_speech_stream(app: FastAPI) -> None:
+    @app.post("/v1/audio/speech/stream")
+    async def create_speech_stream(req: CreateSpeechRequest) -> StreamingResponse:
+        """Streaming TTS - returns chunked PCM audio as codes are generated."""
+        import numpy as np
+        import torch
+
+        client: Client = app.state.client
+        default_model: str = app.state.model_name
+        request_id = f"speech-{uuid.uuid4()}"
+
+        gen_req = _build_speech_generate_request(req, default_model)
+        gen_req.stream = True
+
+        # Lazy-load vocoder codec on first use
+        if not hasattr(app.state, 'vocoder_codec') or app.state.vocoder_codec is None:
+            from sglang_omni.models.fishaudio_s2_pro.pipeline.stages import (
+                _resolve_checkpoint, _load_codec,
+            )
+            _ckpt = _resolve_checkpoint("fishaudio/s2-pro")
+            app.state.vocoder_codec = _load_codec(_ckpt, "cuda")
+            app.state.vocoder_device = "cuda"
+            logger.info("Streaming vocoder codec loaded on GPU")
+        codec = app.state.vocoder_codec
+        codec_device = app.state.vocoder_device
+
+        CHUNK_SIZE = 5  # decode every N tokens
+
+        async def audio_stream():
+            """Yield PCM audio chunks as codes stream in."""
+            code_columns = []  # list of [num_codebooks+1] tensors
+            chunk_idx = 0
+
+            logger.info("Starting streaming generate for %s", request_id)
+            async for chunk in client.generate(gen_req, request_id=request_id):
+                raw = chunk.to_dict()
+                chunk_data = raw.get("audio_data") or raw.get("data")
+                logger.info(
+                    "Stream chunk %d: stage=%s modality=%s audio_type=%s chunk_data_type=%s token_ids=%s",
+                    chunk_idx, chunk.stage_name, chunk.modality,
+                    type(chunk.audio_data).__name__ if chunk.audio_data is not None else None,
+                    type(chunk_data).__name__ if chunk_data is not None else None,
+                    chunk.token_ids[:3] if chunk.token_ids else None,
+                )
+                chunk_idx += 1
+
+                # Convert list to Tensor if needed (after ZMQ serialization)
+                if isinstance(chunk_data, list):
+                    chunk_data = torch.tensor(chunk_data)
+                if isinstance(chunk_data, torch.Tensor):
+                    # Per-token codes have shape [num_codebooks+1] (~11 elements)
+                    # Final vocoder output is much larger (full audio waveform)
+                    # Only accumulate small per-token codes
+                    if chunk_data.numel() <= 50:
+                        code_columns.append(chunk_data)
+
+                        if len(code_columns) >= CHUNK_SIZE:
+                            codes = torch.stack([c[:, 0] if c.dim() > 1 else c for c in code_columns], dim=1)
+                            cb_codes = codes[1:]
+                            with torch.no_grad():
+                                audio = codec.from_indices(cb_codes.unsqueeze(0).to(codec_device))
+                            audio_np = audio[0, 0].float().cpu().numpy()
+                            pcm = (audio_np * 32767).clip(-32768, 32767).astype(np.int16)
+                            yield pcm.tobytes()
+                            code_columns = []
+                    else:
+                        # Large tensor = final vocoder output, skip (we decode incrementally)
+                        pass
+
+                elif chunk.audio_data is not None:
+                    # Final complete audio from vocoder stage
+                    audio_np = chunk.audio_data
+                    if hasattr(audio_np, "numpy"):
+                        audio_np = audio_np.float().numpy()
+                    elif not isinstance(audio_np, np.ndarray):
+                        audio_np = np.array(audio_np, dtype=np.float32)
+                    pcm = (audio_np * 32767).clip(-32768, 32767).astype(np.int16)
+                    yield pcm.tobytes()
+
+            # Flush remaining codes
+            if code_columns:
+                codes = torch.stack([c[:, 0] if c.dim() > 1 else c for c in code_columns], dim=1)
+                cb_codes = codes[1:]
+                with torch.no_grad():
+                    audio = codec.from_indices(cb_codes.unsqueeze(0).to(codec_device))
+                audio_np = audio[0, 0].float().cpu().numpy()
+                pcm = (audio_np * 32767).clip(-32768, 32767).astype(np.int16)
+                yield pcm.tobytes()
+
+        return StreamingResponse(
+            audio_stream(),
+            media_type="audio/pcm",
+            headers={
+                "X-Sample-Rate": "44100",
+                "X-Channels": "1",
+                "X-Bit-Depth": "16",
+            },
+        )
 
 def _build_speech_generate_request(
     req: CreateSpeechRequest,

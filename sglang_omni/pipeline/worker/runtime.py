@@ -380,10 +380,13 @@ class Worker:
         """Forward streaming chunks to the coordinator."""
         if self.stage is None:
             return
+        chunk_count = 0
         try:
             async for chunk in stream_iter:
                 if chunk is None:
                     continue
+                chunk_count += 1
+                logger.info('Worker %s: forwarding stream chunk %d for %s type=%s', self.stage.name if self.stage else '?', chunk_count, request_id, type(chunk).__name__)
                 await self.stage.control_plane.send_stream(
                     StreamMessage(
                         request_id=request_id,
@@ -393,9 +396,10 @@ class Worker:
                     )
                 )
         except asyncio.CancelledError:
+            logger.info('Worker %s: _forward_stream CANCELLED for %s (processed %d chunks)', self.stage.name if self.stage else '?', request_id, chunk_count)
             raise
         except Exception as exc:
-            logger.debug("Worker stream error for %s: %s", request_id, exc)
+            logger.error('Worker %s: _forward_stream ERROR for %s after %d chunks: %s', self.stage.name if self.stage else '?', request_id, chunk_count, exc, exc_info=True)
 
     async def _finish_stream_task(self, task: asyncio.Task[None]) -> None:
         """Wait for stream task to finish and cancel if it stalls."""

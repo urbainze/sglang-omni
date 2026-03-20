@@ -54,9 +54,14 @@ class PrefillManager:
         num_allocatable_reqs: int,
         new_token_ratio: float = 0.5,
     ):
-        # Implement the logic to schedule the next batch of tasks based on the waiting queue
-        # Keep scheduling an unfinished chunked request even when no new waiting
-        # requests are available or allocatable.
+        if self.waiting_queue or self.chunked_req is not None:
+            logger.info(
+                "PrefillManager.schedule: waiting=%d chunked=%s num_allocatable=%d running_bs=%s",
+                len(self.waiting_queue),
+                self.chunked_req is not None,
+                num_allocatable_reqs,
+                running_batch.batch_size() if running_batch is not None else 'None',
+            )
         if self.chunked_req is None and (
             len(self.waiting_queue) == 0 or num_allocatable_reqs <= 0
         ):
@@ -108,7 +113,11 @@ class PrefillManager:
                 # NOTE(ocss8884): not support deterministic infer for now
                 truncation_align_size=None,
             )
-            # TODO(ocss884): process AddReqResult for mamba cache
+            logger.info(
+                "PrefillManager: add_one_req result=%s can_run=%d rid=%s input_len=%s",
+                res, len(adder.can_run_list), req.rid,
+                getattr(req, 'extend_input_len', '?'),
+            )
 
         # Update waiting queue
         can_run_list: List[Req] = adder.can_run_list

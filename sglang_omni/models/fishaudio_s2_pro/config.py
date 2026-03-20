@@ -23,6 +23,7 @@ class S2ProPipelineConfig(PipelineConfig):
     architecture: ClassVar[str] = "FishQwen3OmniForCausalLM"
 
     model_path: str
+    quantization: str | None = None
     entry_stage: str = "preprocessing"
     stages: list[StageConfig] = [
         StageConfig(
@@ -31,7 +32,7 @@ class S2ProPipelineConfig(PipelineConfig):
                 factory=f"{_S2_PKG}.stages.create_preprocessing_executor",
             ),
             get_next=f"{_S2_PKG}.next_stage.preprocessing_next",
-            relay=RelayConfig(device="cpu"),
+            relay=RelayConfig(device="cpu", credits=16),
         ),
         StageConfig(
             name=TTS_ENGINE_STAGE,
@@ -43,7 +44,7 @@ class S2ProPipelineConfig(PipelineConfig):
                 },
             ),
             get_next=f"{_S2_PKG}.next_stage.tts_engine_next",
-            relay=RelayConfig(device="cuda"),
+            relay=RelayConfig(device="cuda", credits=16),
         ),
         StageConfig(
             name=VOCODER_STAGE,
@@ -51,7 +52,7 @@ class S2ProPipelineConfig(PipelineConfig):
                 factory=f"{_S2_PKG}.stages.create_vocoder_executor",
             ),
             get_next=f"{_S2_PKG}.next_stage.vocoder_next",
-            relay=RelayConfig(device="cpu"),
+            relay=RelayConfig(device="cpu", credits=16),
         ),
     ]
 

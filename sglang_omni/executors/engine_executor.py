@@ -62,6 +62,14 @@ class EngineExecutor(Executor):
 
         self._payloads[request_id] = payload
         engine_input = self._request_builder(payload)
+        # Pre-create stream queue before adding request to avoid race condition
+        # (scheduler._subscribe_stream requires request to exist, but we need
+        # the queue ready before add_request so _emit_stream finds it)
+        if hasattr(self._engine, 'scheduler'):
+            sched = self._engine.scheduler
+            if hasattr(sched, '_stream_queues') and request_id not in sched._stream_queues:
+                import asyncio as _aio
+                sched._stream_queues[request_id] = _aio.Queue()
         await self._engine.add_request(request_id, engine_input)
         self._submit_times[request_id] = time.perf_counter()
 
@@ -151,10 +159,14 @@ class EngineExecutor(Executor):
 
     @staticmethod
     def _default_stream_builder(payload: StagePayload | None, item: Any) -> Any:
+        import torch
         if isinstance(item, dict):
-            return item
+            # Convert any Tensor values to lists for serialization
+            return {k: v.tolist() if isinstance(v, torch.Tensor) else v for k, v in item.items()}
         if isinstance(item, tuple) and item:
             item = item[0]
+        if isinstance(item, torch.Tensor):
+            return {"audio_data": item.tolist()}
         if isinstance(item, int):
             return {"token_ids": [item]}
         return {"data": item}

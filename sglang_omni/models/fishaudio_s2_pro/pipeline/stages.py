@@ -116,9 +116,9 @@ def create_preprocessing_executor(model_path: str) -> PreprocessingExecutor:
     tokenizer = PreTrainedTokenizerFast.from_pretrained(checkpoint_dir)
     adapter = S2ProTokenizerAdapter(tokenizer)
 
-    codec = _load_codec(checkpoint_dir, "cpu")
+    codec = _load_codec(checkpoint_dir, "cuda")
 
-    def _encode_reference_audio(audio_path: str, device: str = "cpu") -> torch.Tensor:
+    def _encode_reference_audio(audio_path: str, device: str = "cuda") -> torch.Tensor:
         import torchaudio
 
         audio, sr = torchaudio.load(audio_path)
@@ -201,6 +201,7 @@ def create_sglang_tts_engine_executor(
     device: str = "cuda",
     max_new_tokens: int = 2048,
     top_k: int = 30,
+    quantization: str | None = None,
 ) -> EngineExecutor:
     """Factory for the S2-Pro TTS engine stage."""
     from sglang.srt.server_args import ServerArgs
@@ -219,10 +220,11 @@ def create_sglang_tts_engine_executor(
         model_path=checkpoint_dir,
         tp_size=1,
         dtype="bfloat16",
-        mem_fraction_static=0.85,
+        mem_fraction_static=0.35,
         chunked_prefill_size=8192,
         max_running_requests=64,
         disable_cuda_graph=False,
+        **(dict(quantization=quantization) if quantization else {}),
     )
 
     engine = create_s2pro_sglang_engine(
@@ -238,7 +240,7 @@ def create_sglang_tts_engine_executor(
 
     def _request_builder(payload: StagePayload):
         state = load_state(payload)
-        return build_sglang_tts_request(state, tokenizer)
+        return build_sglang_tts_request(state, tokenizer, request_id=payload.request_id)
 
     def _result_builder(payload: StagePayload, result: Any) -> StagePayload:
         state = load_state(payload)

@@ -109,6 +109,15 @@ def _compile_stage(
     ):
         stage_cfg.executor.args["model_path"] = global_cfg.model_path
 
+    # Inject quantization from global config
+    if (
+        "quantization" in inspect.signature(factory).parameters
+        and "quantization" not in stage_cfg.executor.args
+        and hasattr(global_cfg, "quantization")
+        and global_cfg.quantization is not None
+    ):
+        stage_cfg.executor.args["quantization"] = global_cfg.quantization
+
     # Inject gpu_id from gpu_placement map
     if (
         "gpu_id" in inspect.signature(factory).parameters

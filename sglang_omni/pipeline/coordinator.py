@@ -333,6 +333,10 @@ class Coordinator:
     async def _handle_stream(self, msg: StreamMessage) -> None:
         """Handle a stream chunk from a stage."""
         request_id = msg.request_id
+        logger.info(
+            "Coordinator stream: req=%s from=%s queued=%s",
+            request_id, msg.from_stage, request_id in self._stream_queues,
+        )
         if request_id not in self._stream_queues:
             return
         await self._stream_queues[request_id].put(msg)

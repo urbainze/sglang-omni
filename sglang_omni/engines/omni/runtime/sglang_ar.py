@@ -61,6 +61,12 @@ class SGLangBatchPlanner:
         running: list[SchedulerRequest],
         resource_manager: Any,
     ) -> list[SchedulerRequest]:
+        if waiting or running:
+            logger.info(
+                "BatchPlanner.select_requests: waiting=%d running=%d running_batch_bs=%s",
+                len(waiting), len(running),
+                self.decode_manager.running_batch.batch_size() if self.decode_manager.running_batch else 0
+            )
         self._post_step_operations()
         active_request_ids = {req.request_id for req in waiting}
         active_request_ids.update(req.request_id for req in running)
@@ -152,6 +158,8 @@ class SGLangBatchPlanner:
                 self._cached_schedule_batch = None
                 return []
 
+        if selected:
+            logger.info("BatchPlanner selected %d requests: %s", len(selected), [r.request_id[:20] for r in selected])
         return selected
 
     def build_batch(self, requests: list[SchedulerRequest]) -> Any:
